@@ -7,7 +7,7 @@
 
 import mmcv
 import copy
-import torch
+import torch, pdb
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -22,7 +22,6 @@ from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
 
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
 from projects.mmdet3d_plugin import SPConvVoxelization
-
 
 @DETECTORS.register_module()
 class CmtDetector(MVXTwoStageDetector):
@@ -215,19 +214,20 @@ class CmtDetector(MVXTwoStageDetector):
             if not isinstance(var, list):
                 raise TypeError('{} must be a list, but got {}'.format(
                     name, type(var)))
-
+                
         return self.simple_test(points[0], img_metas[0], img[0], **kwargs)
     
     @force_fp32(apply_to=('x', 'x_img'))
     def simple_test_pts(self, x, x_img, img_metas, rescale=False):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, x_img, img_metas)
-        bbox_list = self.pts_bbox_head.get_bboxes(
-            outs, img_metas, rescale=rescale)
+        bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
+        
         bbox_results = [
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
         ] 
+        import pdb; pdb.set_trace()
         return bbox_results
 
     def simple_test(self, points, img_metas, img=None, rescale=False):
@@ -240,13 +240,15 @@ class CmtDetector(MVXTwoStageDetector):
         
         bbox_list = [dict() for i in range(len(img_metas))]
         if (pts_feats or img_feats) and self.with_pts_bbox:
-            bbox_pts = self.simple_test_pts(
-                pts_feats, img_feats, img_metas, rescale=rescale)
+            bbox_pts = self.simple_test_pts(pts_feats, img_feats, img_metas, rescale=rescale)
+            
             for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
                 result_dict['pts_bbox'] = pts_bbox
+                
         if img_feats and self.with_img_bbox:
-            bbox_img = self.simple_test_img(
-                img_feats, img_metas, rescale=rescale)
+            bbox_img = self.simple_test_img(img_feats, img_metas, rescale=rescale)
+            
             for result_dict, img_bbox in zip(bbox_list, bbox_img):
                 result_dict['img_bbox'] = img_bbox
+                
         return bbox_list

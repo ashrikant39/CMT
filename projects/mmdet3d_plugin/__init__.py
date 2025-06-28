@@ -4,3 +4,4 @@ from .core.bbox.match_costs import BBox3DL1Cost
 from .datasets import *
 from .mmcv_custom import *
 from .models import *
+from .pcdet_models import *

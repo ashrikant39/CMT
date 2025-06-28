@@ -1,0 +1,197 @@
+class_names: ['car','truck', 'construction_vehicle', 'bus', 'trailer',
+              'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone']
+
+data_config:
+  _base_config_: tools/cfgs/dataset_configs/nuscenes_dataset.yaml
+
+  point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+  data_augmentor:
+    disable_aug_list: ['placeholder']
+    aug_config_list:
+      - name: gt_sampling
+        use_road_plane: false
+        db_info_path:
+          - nuscenes_dbinfos_10sweeps_withvelo.pkl
+
+        prepare: {
+          filter_by_min_points: [
+              'car:5','truck:5', 'construction_vehicle:5', 'bus:5', 'trailer:5',
+              'barrier:5', 'motorcycle:5', 'bicycle:5', 'pedestrian:5', 'traffic_cone:5'
+          ],
+        }
+
+        sample_groups: [
+          'car:2','truck:3', 'construction_vehicle:7', 'bus:4', 'trailer:6',
+          'barrier:2', 'motorcycle:6', 'bicycle:6', 'pedestrian:2', 'traffic_cone:2'
+        ]
+        num_point_features: 5
+        database_with_fakelidar: false
+        remove_extra_width: [0.0, 0.0, 0.0]
+        limit_whole_scene: true
+
+      - name: random_world_flip
+        along_axis_list: ['x', 'y']
+
+      - name: random_world_rotation
+        world_rot_angle: [-0.78539816, 0.78539816]
+
+      - name: random_world_scaling
+        world_scale_range: [0.9, 1.1]
+
+      - name: random_world_translation
+        noise_translate_std: [0.5, 0.5, 0.5]
+
+  data_processor:
+    - name: mask_points_and_boxes_outside_range
+      remove_outside_boxes: true
+      mask_z: true
+
+    - name: shuffle_points
+      shuffle_enabled: {
+        'train': true,
+        'test': true
+      }
+
+    - name: transform_points_to_voxels_placeholder
+      voxel_size: [0.3, 0.3, 8.0]
+
+model:
+  name: TransFusion
+
+  vfe:
+    name: DynPillarVFE
+    with_distance: false
+    use_abslote_xyz: true
+    use_norm: true
+    num_filters: [128, 128]
+
+  backbone_3d:
+    name: DSVT
+    input_layer:
+      sparse_shape: [360, 360, 1]
+      downsample_stride: []
+      d_model: [128]
+      set_info: [[90, 4]]
+      window_shape: [[30, 30, 1]]
+      hybrid_factor: [1, 1, 1]
+      shifts_list: [[[0, 0, 0], [15, 15, 0]]]
+      normalize_pos: false
+
+    block_name: ['DSVTBlock']
+    set_info: [[90, 4]]
+    d_model: [128]
+    nhead: [8]
+    dim_feedforward: [256]
+    dropout: 0.0
+    activation: gelu
+    output_shape: [360, 360]
+    conv_out_channel: 128
+
+  map_to_bev:
+    name: PointPillarScatter3d
+    input_shape: [360, 360, 1]
+    num_bev_features: 128
+
+  backbone_2d:
+    name: BaseBEVResBackbone
+    layer_nums: [1, 2, 2]
+    layer_strides: [1, 2, 2]
+    num_filters: [128, 128, 256]
+    upsample_strides: [0.5, 1, 2]
+    num_upsample_filters: [128, 128, 128]
+
+  dense_head:
+    class_agnostic: false
+    name: TransFusionHead
+
+    use_bias_before_norm: false
+
+    num_proposals: 200
+    hidden_channel: 128
+    num_classes: 10
+    num_heads: 8
+    nms_kernel_size: 3
+    ffn_channel: 256
+    dropout: 0
+    bn_momentum: 0.1
+    activation: relu
+
+    num_hm_conv: 2
+    separate_head_cfg:
+      head_order: ['center', 'height', 'dim', 'rot', 'vel']
+      head_dict: {
+        'center': {'out_channels': 2, 'num_conv': 2},
+        'height': {'out_channels': 1, 'num_conv': 2},
+        'dim': {'out_channels': 3, 'num_conv': 2},
+        'rot': {'out_channels': 2, 'num_conv': 2},
+        'vel': {'out_channels': 2, 'num_conv': 2},
+        'iou': {'out_channels': 1, 'num_conv': 2},
+      }
+
+    target_assigner_config:
+      feature_map_stride: 2
+      dataset: nuScenes
+      gaussian_overlap: 0.1
+      min_radius: 2
+      hungarian_assigner:
+        cls_cost: {'gamma': 2.0, 'alpha': 0.25, 'weight': 0.15}
+        reg_cost: {'weight': 0.25}
+        iou_cost: {'weight': 0.25}
+
+    loss_config:
+      loss_weights: {
+        'cls_weight': 1.0,
+        'bbox_weight': 0.25,
+        'hm_weight': 1.0,
+        'loss_iou_rescore_weight': 0.5,
+        'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+      }
+      loss_cls:
+        use_sigmoid: true
+        gamma: 2.0
+        alpha: 0.25
+
+    post_processing:
+      score_thresh: 0.0
+      post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+      use_iou_to_rectify_score: true
+      iou_rectifier: [0.5]
+      nms_config:
+        nms_type: nms_gpu
+        nms_thresh: 0.2
+        nms_pre_maxsize: 1000
+        nms_post_maxsize: 100
+        score_thres: 0.
+
+  post_processing:
+    recall_thresh_list: [0.3, 0.5, 0.7]
+    score_thresh: 0.1
+    output_raw_score: false
+    eval_metric: kitti
+
+optimization:
+  batch_size_per_gpu: 4
+  num_epochs: 20
+
+  optimizer: adam_onecycle
+  lr: 0.00001
+  weight_decay: 0.005
+  momentum: 0.9
+
+  moms: [0.95, 0.85]
+  pct_start: 0.4
+  div_factor: 10
+  decay_step_list: [35, 45]
+  lr_decay: 0.1
+  lr_clip: 0.0000001
+
+  lr_warmup: false
+  warmup_epoch: 1
+
+  grad_norm_clip: 35
+  loss_scale_fp16: 4.0
+
+hook:
+  disableaugmentationhook:
+    disable_aug_list: ['gt_sampling']
+    num_last_epochs: 4

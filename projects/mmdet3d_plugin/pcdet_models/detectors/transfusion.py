@@ -28,17 +28,17 @@ class TransFusion(Base3DDetector):
         self.backbone_2d = BACKBONES_2D.build(pts_backbone_2d)
         self.dense_head = HEADS.build(bbox_head)
         
-        self.module_list = nn.ModuleList(
-            [
-                self.vfe,
-                self.backbone_3d,
-                self.map_to_bev_module,
-                self.backbone_2d,
-                self.dense_head
-            ]
-        )
-        
         self.init_weights()
+        
+    def aug_test(self):
+        pass
+    
+    def simple_test(self):
+        pass
+
+    def extract_feat(self, imgs):
+        pass
+    
     
     def forward_modules(self, points):
         
@@ -51,8 +51,7 @@ class TransFusion(Base3DDetector):
         
         batch_dict['points'] = torch.cat(padded_points, dim=0)
         
-        for module in self.module_list:
-            batch_dict = module(batch_dict)
+        batch_dict = self.dense_head(self.backbone_2d(self.map_to_bev_module(self.backbone_3d(self.vfe(batch_dict)))))
             
         return batch_dict
     
@@ -116,11 +115,10 @@ class TransFusion(Base3DDetector):
         predictions = []
         
         for pred in pred_dicts:
-            
             predictions.append(dict(
-                boxes_3d = LiDARInstance3DBoxes(pred['pred_boxes'].cpu()),
+                boxes_3d = LiDARInstance3DBoxes(pred['pred_boxes'].cpu(), box_dim=9),
                 scores_3d = pred['pred_scores'].cpu(),
-                labels_3d = pred['pred_labels'].cpu()
+                labels_3d = pred['pred_labels'].cpu() - 1
             ))
         
         

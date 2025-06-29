@@ -227,7 +227,6 @@ class CmtDetector(MVXTwoStageDetector):
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
         ] 
-        import pdb; pdb.set_trace()
         return bbox_results
 
     def simple_test(self, points, img_metas, img=None, rescale=False):

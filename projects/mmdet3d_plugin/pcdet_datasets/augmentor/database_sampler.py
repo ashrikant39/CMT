@@ -10,7 +10,7 @@ import torch.distributed as dist
 
 from projects.mmdet3d_plugin.pcdet_ops.iou3d_nms import iou3d_nms_utils
 from projects.mmdet3d_plugin.pcdet_utils import box_utils, common_utils, calibration_kitti
-from pcdet_datasets.kitti.kitti_object_eval_python import kitti_common
+from projects.mmdet3d_plugin.pcdet_datasets.kitti.kitti_object_eval_python import kitti_common
 
 class DataBaseSampler(object):
     def __init__(self, root_path, sampler_cfg, class_names, logger=None):

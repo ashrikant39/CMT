@@ -11,7 +11,7 @@ voxel_size=[0.3, 0.3, 8.0]
 out_size_factor=8
 evaluation=dict(interval=20)
 dataset_type='CustomNuScenesDataset'
-data_root='data/nuscenes/'
+data_root='/home/ashri/hunseok-datasets/object-detection-datasets/nuscenes-mini-cmt/'
 num_bev_features=128
 num_classes=10
 

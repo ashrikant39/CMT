@@ -2,8 +2,8 @@ import torch
 from torch import nn
 from math import ceil
 
-from pcdet_models.model_utils.dsvt_utils import get_window_coors, get_inner_win_inds_cuda, get_pooling_index, get_continous_inds
-from pcdet_models.model_utils.dsvt_utils import PositionEmbeddingLearned
+from projects.mmdet3d_plugin.pcdet_models.model_utils.dsvt_utils import get_window_coors, get_inner_win_inds_cuda, get_pooling_index, get_continous_inds
+from projects.mmdet3d_plugin.pcdet_models.model_utils.dsvt_utils import PositionEmbeddingLearned
 
 
 class DSVTInputLayer(nn.Module):
@@ -30,22 +30,31 @@ class DSVTInputLayer(nn.Module):
         shift_list (list): Shift window. Length: stage_num.
         normalize_pos (bool): Whether to normalize coordinates in position embedding.
     '''
-    def __init__(self, model_cfg):
+    def __init__(
+        self, 
+        sparse_shape,
+        downsample_stride,
+        d_model,
+        set_info,
+        window_shape,
+        hybrid_factor,
+        shifts_list,
+        normalize_pos,
+        ):
         super().__init__()
         
-        self.model_cfg = model_cfg 
-        self.sparse_shape = self.model_cfg.sparse_shape # [360, 360, 1]
-        self.window_shape = self.model_cfg.window_shape # [[30, 30, 1]]
-        self.downsample_stride = self.model_cfg.downsample_stride # []
-        self.d_model = self.model_cfg.d_model # [128]
-        self.set_info = self.model_cfg.set_info # [[90, 4]]
+        self.sparse_shape = sparse_shape # [360, 360, 1]
+        self.window_shape = window_shape # [[30, 30, 1]]
+        self.downsample_stride = downsample_stride # []
+        self.d_model = d_model # [128]
+        self.set_info = set_info # [[90, 4]]
         self.stage_num = len(self.d_model)
 
-        self.hybrid_factor = self.model_cfg.hybrid_factor # [1, 1, 1]
+        self.hybrid_factor = hybrid_factor # [1, 1, 1]
         self.window_shape = [[self.window_shape[s_id], [self.window_shape[s_id][coord_id] * self.hybrid_factor[coord_id] \
                                                 for coord_id in range(3)]] for s_id in range(self.stage_num)] # [[[30,30,1], [30,30,1]]]
-        self.shift_list = self.model_cfg.shifts_list # [[[0, 0, 0], [15, 15, 0]]]
-        self.normalize_pos = self.model_cfg.normalize_pos # False
+        self.shift_list = shifts_list # [[[0, 0, 0], [15, 15, 0]]]
+        self.normalize_pos = normalize_pos # False
             
         self.num_shifts = [2,] * len(self.window_shape) # [2, 2, 2]
 

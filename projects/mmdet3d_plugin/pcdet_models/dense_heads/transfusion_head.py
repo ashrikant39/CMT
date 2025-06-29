@@ -76,15 +76,14 @@ class TransFusionHead(BaseModule):
         loss_config:dict,
         post_processing:dict,
         input_channels,
-        num_class,
         point_cloud_range,
         voxel_size,
     ):
         super(TransFusionHead, self).__init__()
 
-        self.voxel_size = torch.tensor(voxel_size)
-        self.point_cloud_range = torch.tensor(point_cloud_range)
-        self.grid_size = (point_cloud_range[3:6] - point_cloud_range[0:3]) / voxel_size
+        self.voxel_size = voxel_size
+        self.point_cloud_range = np.array(point_cloud_range)
+        self.grid_size = np.round((self.point_cloud_range[3:6] - self.point_cloud_range[0:3]) / self.voxel_size).astype(np.int64)
         self.num_classes = num_classes
 
         self.feature_map_stride = target_assigner_config.get('feature_map_stride', None)
@@ -121,9 +120,9 @@ class TransFusionHead(BaseModule):
         self.shared_conv = nn.Conv2d(in_channels=input_channels,out_channels=hidden_channel,kernel_size=3,padding=1)
         layers = []
         layers.append(BasicBlock2D(hidden_channel,hidden_channel, kernel_size=3,padding=1,bias=True))
-        layers.append(nn.Conv2d(in_channels=hidden_channel,out_channels=num_class,kernel_size=3,padding=1))
+        layers.append(nn.Conv2d(in_channels=hidden_channel,out_channels=num_classes,kernel_size=3,padding=1))
         self.heatmap_head = nn.Sequential(*layers)
-        self.class_encoding = nn.Conv1d(num_class, hidden_channel, 1)
+        self.class_encoding = nn.Conv1d(num_classes, hidden_channel, 1)
 
         # transformer decoder layers for object query with LiDAR feature
         self.decoder = TransformerDecoderLayer(hidden_channel, num_heads, ffn_channel, dropout, activation,

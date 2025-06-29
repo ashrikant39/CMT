@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from pcdet_ops.ingroup_inds.ingroup_inds_op import ingroup_inds
+from projects.mmdet3d_plugin.pcdet_ops.ingroup_inds.ingroup_inds_op import ingroup_inds
 
 
 get_inner_win_inds_cuda = ingroup_inds

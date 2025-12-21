@@ -7,7 +7,7 @@
 
 import mmcv
 import copy
-import torch, pdb
+import torch, pdb, os
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
@@ -38,9 +38,9 @@ class CmtDetector(MVXTwoStageDetector):
         if pts_voxel_cfg:
             self.pts_voxel_layer = SPConvVoxelization(**pts_voxel_cfg)
 
-    def init_weights(self):
-        """Initialize model weights."""
-        super(CmtDetector, self).init_weights()
+    # def init_weights(self):
+    #     """Initialize model weights."""
+    #     super(CmtDetector, self).init_weights()
 
     @auto_fp16(apply_to=('img'), out_fp32=True) 
     def extract_img_feat(self, img, img_metas):
@@ -110,7 +110,27 @@ class CmtDetector(MVXTwoStageDetector):
             coors_batch.append(coor_pad)
         coors_batch = torch.cat(coors_batch, dim=0)
         return voxels, num_points, coors_batch
+    
+    
+    @auto_fp16(apply_to=('img', 'points'))
+    def forward(self, return_loss=True, return_preds=True, **kwargs):
+        """Calls either forward_train or forward_test depending on whether
+        return_loss=True.
 
+        Note this setting will change the expected inputs. When
+        `return_loss=True`, img and img_metas are single-nested (i.e.
+        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
+        img_metas should be double nested (i.e.  list[torch.Tensor],
+        list[list[dict]]), with the outer list indicating test time
+        augmentations.
+        """
+        if return_loss:
+            return self.forward_train(**kwargs)
+        elif return_preds:
+            return self.forward_test(**kwargs)
+        else:
+            return self.forward_save(**kwargs)
+            
     def forward_train(self,
                       points=None,
                       img_metas=None,
@@ -146,7 +166,6 @@ class CmtDetector(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-
         img_feats, pts_feats = self.extract_feat(
             points, img=img, img_metas=img_metas)
         losses = dict()
@@ -184,7 +203,7 @@ class CmtDetector(MVXTwoStageDetector):
             pts_feats = [None]
         if img_feats is None:
             img_feats = [None]
-        outs = self.pts_bbox_head(pts_feats, img_feats, img_metas)
+        outs, _, _ = self.pts_bbox_head(pts_feats, img_feats, img_metas)
         loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
         return losses
@@ -216,17 +235,74 @@ class CmtDetector(MVXTwoStageDetector):
                     name, type(var)))
                 
         return self.simple_test(points[0], img_metas[0], img[0], **kwargs)
+
+    
+    def forward_save(self, **kwargs):
+        
+        query_dir = "/home/ashri/hunseok-datasets/object-detection-datasets/nuscenes-cmt-queryFeats/"
+        assert os.path.exists(query_dir)
+        
+        
+        # kwargs['img_metas'][0][batch_idx].keys()
+        # dict_keys(['filename', 'ori_shape', 'img_shape', 'lidar2img', 
+        # 'pad_shape', 'scale_factor', 'flip', 'pcd_horizontal_flip', 
+        # 'pcd_vertical_flip', 'box_mode_3d', 'box_type_3d', 
+        # 'img_norm_cfg', 'pcd_trans', 'sample_idx', 'pcd_scale_factor', 
+        # 'pcd_rotation', 'pts_filename', 'transformation_3d_flow', 'timestamp'])
+        # bbox_results, queries, reference = self.forward_test(**kwargs)
+
+        points = kwargs['points'][0]
+        img = kwargs['img'][0]
+        img_metas = kwargs['img_metas'][0]
+        rescale= kwargs['rescale']
+                
+        img_feats, pts_feats = self.extract_feat(points, img, img_metas)
+        bbox_outs, queries, reference = self.pts_bbox_head(pts_feats, img_feats, img_metas)        
+        bbox_list = self.pts_bbox_head.get_bboxes(bbox_outs, img_metas, rescale=rescale)
+        
+        
+        bbox_results = [
+            bbox3d2result(bboxes, scores, labels)
+            for bboxes, scores, labels in bbox_list
+        ]
+        
+        saves = []
+        
+        for batch_idx in range(len(bbox_results)):
+            
+            base_name = img_metas[batch_idx]['pts_filename'].split('/')[-1].split('.')[0] + '.npz'
+            
+            boxes = bbox_results[batch_idx]['boxes_3d'].tensor.detach().cpu().numpy()
+            scores = bbox_results[batch_idx]['scores_3d'].detach().cpu().numpy()
+            labels = bbox_results[batch_idx]['labels_3d'].cpu().numpy()
+
+            query_feat=queries[0][:, batch_idx, :, :].T.cpu().numpy()
+            reference_feat = reference[0][batch_idx, :, :].cpu().numpy()
+            
+            filename = os.path.join(query_dir, base_name)
+            np.savez_compressed(
+                filename,
+                boxes=boxes,
+                scores=scores,
+                labels=labels,
+                query_feat=query_feat,
+                reference_feat=reference_feat
+            )
+            
+            saves.append(True)
+        
+        return saves
     
     @force_fp32(apply_to=('x', 'x_img'))
     def simple_test_pts(self, x, x_img, img_metas, rescale=False):
         """Test function of point cloud branch."""
-        outs = self.pts_bbox_head(x, x_img, img_metas)
+        outs, _, _ = self.pts_bbox_head(x, x_img, img_metas)
         bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)
         
         bbox_results = [
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list
-        ] 
+        ]
         return bbox_results
 
     def simple_test(self, points, img_metas, img=None, rescale=False):
@@ -251,3 +327,4 @@ class CmtDetector(MVXTwoStageDetector):
                 result_dict['img_bbox'] = img_bbox
                 
         return bbox_list
+

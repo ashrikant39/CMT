@@ -19,5 +19,12 @@ class CustomFp16OptimizerHook(Fp16OptimizerHook):
     def before_run(self, runner) -> None:
         super().before_run(runner)
         for module_name, v in self.custom_fp16.items():
-            runner.model.module._modules[module_name].fp16_enabled = v
+            if isinstance(v, bool):
+                runner.model.module._modules[module_name].fp16_enabled = v
+            # elif isinstance(v, dict):
+            #     for name, child in runner.model.module._modules[module_name].named_children():
+            #         if name in v:
+            #             child.fp16_enabled = v[name]
+                    
+                
     

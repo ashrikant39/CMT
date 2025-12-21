@@ -29,10 +29,12 @@ class BBox3DL1Cost(object):
 
 @MATCH_COST.register_module()
 class BBoxBEVL1Cost(object):
-    def __init__(self, weight):
+    def __init__(self, weight, pc_range):
         self.weight = weight
+        self.pc_range = pc_range
 
-    def __call__(self, bboxes, gt_bboxes, pc_range):
+    def __call__(self, bboxes, gt_bboxes):
+        pc_range = self.pc_range
         pc_start = bboxes.new(pc_range[0:2])
         pc_range = bboxes.new(pc_range[3:5]) - bboxes.new(pc_range[0:2])
         # normalize the box center to [0, 1]

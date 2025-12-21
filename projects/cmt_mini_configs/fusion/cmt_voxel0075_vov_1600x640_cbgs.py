@@ -10,7 +10,7 @@ voxel_size = [0.075, 0.075, 0.2]
 out_size_factor = 8
 evaluation = dict(interval=20)
 dataset_type = 'CustomNuScenesDataset'
-data_root = '/home/ashri/hunseok-datasets/object-detection-datasets/nuscenes-mini-cmt/'
+data_root = '/home/ashri/hunseok-datasets/object-detection-datasets/nuscenes-mini-temporal-cmt/'
 input_modality = dict(
     use_lidar=True,
     use_camera=True,
@@ -149,7 +149,6 @@ test_pipeline = [
             dict(type='Collect3D', keys=['points', 'img'])
         ])
 ]
-
 data = dict(
     samples_per_gpu=2,
     workers_per_gpu=4,

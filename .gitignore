@@ -147,3 +147,9 @@ work_dir
 experiments/
 job_logs/
 scripts/
+*.yaml
+*.txt
+*.py
+*.sh
+*.pkl
+**/*.png

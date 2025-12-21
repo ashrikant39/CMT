@@ -2,7 +2,7 @@
 import argparse
 import os.path as osp
 
-from data_converter import nuscenes_converter
+from data_converter import nuscenes_converter_updated as nuscenes_converter
 from data_converter.create_gt_database import create_groundtruth_database
 
 

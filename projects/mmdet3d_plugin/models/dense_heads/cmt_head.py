@@ -35,6 +35,7 @@ import collections
 
 from functools import reduce
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
+import pdb, mmcv
 
 
 def pos2embed(pos, num_pos_feats=128, temperature=10000):
@@ -218,6 +219,7 @@ class CmtHead(BaseModule):
                  noise_trans=0.0,
                  dn_weight=1.0,
                  split=0.75,
+                 enable_dn_training=True,
                  train_cfg=None,
                  test_cfg=None,
                  common_heads=dict(
@@ -276,6 +278,7 @@ class CmtHead(BaseModule):
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.pc_range = self.bbox_coder.pc_range
         self.fp16_enabled = False
+        self.enable_dn_training = enable_dn_training
            
         self.shared_conv = ConvModule(
             in_channels,
@@ -316,6 +319,17 @@ class CmtHead(BaseModule):
             self.assigner = build_assigner(train_cfg["assigner"])
             sampler_cfg = dict(type='PseudoSampler')
             self.sampler = build_sampler(sampler_cfg, context=self)
+            
+        self.freeze_modules = [
+            "reference_points",
+            "shared_conv",
+            "bev_embedding",
+            "rv_embedding"
+        ]
+        
+        for module in self.freeze_modules:
+            for param in getattr(self, module).parameters():
+                param.requires_grad = False
 
     def init_weights(self):
         super(CmtHead, self).init_weights()
@@ -337,7 +351,8 @@ class CmtHead(BaseModule):
         return coord_base
 
     def prepare_for_dn(self, batch_size, reference_points, img_metas):
-        if self.training:
+        
+        if self.enable_dn_training and self.training:
             targets = [torch.cat((img_meta['gt_bboxes_3d']._data.gravity_center, img_meta['gt_bboxes_3d']._data.tensor[:, 3:]),dim=1) for img_meta in img_metas ]
             labels = [img_meta['gt_labels_3d']._data for img_meta in img_metas ]
             known = [(torch.ones_like(t)).cuda() for t in labels]
@@ -422,7 +437,7 @@ class CmtHead(BaseModule):
         coords_d = 1 + torch.arange(self.depth_num, device=img_feats[0].device).float() * (self.pc_range[3] - 1) / self.depth_num
         coords_h, coords_w, coords_d = torch.meshgrid([coords_h, coords_w, coords_d])
 
-        coords = torch.stack([coords_w, coords_h, coords_d, coords_h.new_ones(coords_h.shape)], dim=-1)
+        coords = torch.stack([coords_w, coords_h, coords_d, coords_h.new_ones(coords_h.shape)], dim=-1) # double here
         coords[..., :2] = coords[..., :2] * coords[..., 2:3]
         
         imgs2lidars = np.concatenate([np.linalg.inv(meta['lidar2img']) for meta in img_metas])
@@ -430,6 +445,7 @@ class CmtHead(BaseModule):
         coords_3d = torch.einsum('hwdo, bco -> bhwdc', coords, imgs2lidars)
         coords_3d = (coords_3d[..., :3] - coords_3d.new_tensor(self.pc_range[:3])[None, None, None, :] )\
                         / (coords_3d.new_tensor(self.pc_range[3:]) - coords_3d.new_tensor(self.pc_range[:3]))[None, None, None, :]
+        coords_3d = coords_3d.float()
         return self.rv_embedding(coords_3d.reshape(*coords_3d.shape[:-2], -1))
 
     def _bev_query_embed(self, ref_points, img_metas):
@@ -442,9 +458,8 @@ class CmtHead(BaseModule):
         lidars2imgs = torch.from_numpy(lidars2imgs).float().to(ref_points.device)
         imgs2lidars = np.stack([np.linalg.inv(meta['lidar2img']) for meta in img_metas])
         imgs2lidars = torch.from_numpy(imgs2lidars).float().to(ref_points.device)
-
         ref_points = ref_points * (ref_points.new_tensor(self.pc_range[3:]) - ref_points.new_tensor(self.pc_range[:3])) + ref_points.new_tensor(self.pc_range[:3])
-        proj_points = torch.einsum('bnd, bvcd -> bvnc', torch.cat([ref_points, ref_points.new_ones(*ref_points.shape[:-1], 1)], dim=-1), lidars2imgs)
+        proj_points = torch.einsum('bnd, bvcd -> bvnc', torch.cat([ref_points, ref_points.new_ones(*ref_points.shape[:-1], 1)], dim=-1), lidars2imgs) # double here
         
         proj_points_clone = proj_points.clone()
         z_mask = proj_points_clone[..., 2:3].detach() > 0
@@ -455,13 +470,14 @@ class CmtHead(BaseModule):
         mask &= z_mask.squeeze(-1)
 
         coords_d = 1 + torch.arange(self.depth_num, device=ref_points.device).float() * (self.pc_range[3] - 1) / self.depth_num
-        proj_points_clone = torch.einsum('bvnc, d -> bvndc', proj_points_clone, coords_d)
+        proj_points_clone = torch.einsum('bvnc, d -> bvndc', proj_points_clone, coords_d) # double here
         proj_points_clone = torch.cat([proj_points_clone[..., :3], proj_points_clone.new_ones(*proj_points_clone.shape[:-1], 1)], dim=-1)
-        projback_points = torch.einsum('bvndo, bvco -> bvndc', proj_points_clone, imgs2lidars)
+        projback_points = torch.einsum('bvndo, bvco -> bvndc', proj_points_clone, imgs2lidars) # double here
 
         projback_points = (projback_points[..., :3] - projback_points.new_tensor(self.pc_range[:3])[None, None, None, :] )\
                         / (projback_points.new_tensor(self.pc_range[3:]) - projback_points.new_tensor(self.pc_range[:3]))[None, None, None, :]
         
+        projback_points = projback_points.float()
         rv_embeds = self.rv_embedding(projback_points.reshape(*projback_points.shape[:-2], -1))
         rv_embeds = (rv_embeds * mask.unsqueeze(-1)).sum(dim=1)
         return rv_embeds
@@ -476,30 +492,39 @@ class CmtHead(BaseModule):
         """
             x: [bs c h w]
             return List(dict(head_name: [num_dec x bs x num_query * head_dim]) ) x task_num
+            
+            x               :   (2, 256, 180, 180)
+            x_img           :   (12, 256, 40, 100)
+            rv_pos_embeds   :   (12, 40, 100, 256)
+            bev_pos_embeds  :   (32400, 256)
+            rv_query_embeds :   (2, 900, 256)
+            bev_query_embeds:   (2, 900, 256)
+            attn_mask       :   None      
         """
         ret_dicts = []
         x = self.shared_conv(x)
-        
+            
         reference_points = self.reference_points.weight
         reference_points, attn_mask, mask_dict = self.prepare_for_dn(x.shape[0], reference_points, img_metas)
-        
         mask = x.new_zeros(x.shape[0], x.shape[2], x.shape[3])
         
         rv_pos_embeds = self._rv_pe(x_img, img_metas)
         bev_pos_embeds = self.bev_embedding(pos2embed(self.coords_bev.to(x.device), num_pos_feats=self.hidden_dim))
-        
-        bev_query_embeds, rv_query_embeds = self.query_embed(reference_points, img_metas)
-        query_embeds = bev_query_embeds + rv_query_embeds
 
+        bev_query_embeds, rv_query_embeds = self.query_embed(reference_points, img_metas)
+        query_embeds = bev_query_embeds + rv_query_embeds        
         outs_dec, _ = self.transformer(
                             x, x_img, query_embeds,
                             bev_pos_embeds, rv_pos_embeds,
-                            attn_masks=attn_mask
-                        )
-        outs_dec = torch.nan_to_num(outs_dec)
-
-        reference = inverse_sigmoid(reference_points.clone())
+                            attn_masks=attn_mask)
         
+        # data = mmcv.load("work_dir/activations/cmt_out_acts.pkl")
+        # store = outs_dec[-1].reshape(-1).cpu().detach().numpy()
+        # data.append(store)
+        # mmcv.dump(data, "work_dir/activations/cmt_out_acts.pkl")
+        
+        outs_dec = torch.nan_to_num(outs_dec)            
+        reference = inverse_sigmoid(reference_points.clone())    
         flag = 0
         for task_id, task in enumerate(self.task_heads, 0):
             outs = task(outs_dec)
@@ -543,13 +568,17 @@ class CmtHead(BaseModule):
                 outs['dn_mask_dict'] = task_mask_dict
             
             ret_dicts.append(outs)
+        return ret_dicts, outs_dec, reference
 
-        return ret_dicts
 
     def forward(self, pts_feats, img_feats=None, img_metas=None):
         """
             list([bs, c, h, w])
         """
+        for module in self.freeze_modules:
+            module = getattr(self, module)
+            module.eval()
+            
         img_metas = [img_metas for _ in range(len(pts_feats))]
         return multi_apply(self.forward_single, pts_feats, img_feats, img_metas)
     
@@ -871,34 +900,35 @@ class CmtHead(BaseModule):
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
             num_dec_layer += 1
         
-        dn_pred_bboxes, dn_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
-        dn_mask_dicts = collections.defaultdict(list)
-        for task_id, preds_dict in enumerate(preds_dicts, 0):
-            for dec_id in range(num_decoder):
-                pred_bbox = torch.cat(
-                    (preds_dict[0]['dn_center'][dec_id], preds_dict[0]['dn_height'][dec_id],
-                    preds_dict[0]['dn_dim'][dec_id], preds_dict[0]['dn_rot'][dec_id],
-                    preds_dict[0]['dn_vel'][dec_id]),
-                    dim=-1
-                )
-                dn_pred_bboxes[dec_id].append(pred_bbox)
-                dn_pred_logits[dec_id].append(preds_dict[0]['dn_cls_logits'][dec_id])
-                dn_mask_dicts[dec_id].append(preds_dict[0]['dn_mask_dict'])
-        dn_pred_bboxes = [dn_pred_bboxes[idx] for idx in range(num_decoder)]
-        dn_pred_logits = [dn_pred_logits[idx] for idx in range(num_decoder)]
-        dn_mask_dicts = [dn_mask_dicts[idx] for idx in range(num_decoder)]
-        dn_loss_cls, dn_loss_bbox = multi_apply(
-            self.dn_loss_single, dn_pred_bboxes, dn_pred_logits, dn_mask_dicts
-        )
+        if self.enable_dn_training is True:
+            dn_pred_bboxes, dn_pred_logits = collections.defaultdict(list), collections.defaultdict(list)
+            dn_mask_dicts = collections.defaultdict(list)
+            for task_id, preds_dict in enumerate(preds_dicts, 0):
+                for dec_id in range(num_decoder):
+                    pred_bbox = torch.cat(
+                        (preds_dict[0]['dn_center'][dec_id], preds_dict[0]['dn_height'][dec_id],
+                        preds_dict[0]['dn_dim'][dec_id], preds_dict[0]['dn_rot'][dec_id],
+                        preds_dict[0]['dn_vel'][dec_id]),
+                        dim=-1
+                    )
+                    dn_pred_bboxes[dec_id].append(pred_bbox)
+                    dn_pred_logits[dec_id].append(preds_dict[0]['dn_cls_logits'][dec_id])
+                    dn_mask_dicts[dec_id].append(preds_dict[0]['dn_mask_dict'])
+            dn_pred_bboxes = [dn_pred_bboxes[idx] for idx in range(num_decoder)]
+            dn_pred_logits = [dn_pred_logits[idx] for idx in range(num_decoder)]
+            dn_mask_dicts = [dn_mask_dicts[idx] for idx in range(num_decoder)]
+            dn_loss_cls, dn_loss_bbox = multi_apply(
+                self.dn_loss_single, dn_pred_bboxes, dn_pred_logits, dn_mask_dicts
+            )
 
-        loss_dict['dn_loss_cls'] = dn_loss_cls[-1]
-        loss_dict['dn_loss_bbox'] = dn_loss_bbox[-1]
-        num_dec_layer = 0
-        for loss_cls_i, loss_bbox_i in zip(dn_loss_cls[:-1],
-                                           dn_loss_bbox[:-1]):
-            loss_dict[f'd{num_dec_layer}.dn_loss_cls'] = loss_cls_i
-            loss_dict[f'd{num_dec_layer}.dn_loss_bbox'] = loss_bbox_i
-            num_dec_layer += 1
+            loss_dict['dn_loss_cls'] = dn_loss_cls[-1]
+            loss_dict['dn_loss_bbox'] = dn_loss_bbox[-1]
+            num_dec_layer = 0
+            for loss_cls_i, loss_bbox_i in zip(dn_loss_cls[:-1],
+                                            dn_loss_bbox[:-1]):
+                loss_dict[f'd{num_dec_layer}.dn_loss_cls'] = loss_cls_i
+                loss_dict[f'd{num_dec_layer}.dn_loss_bbox'] = loss_bbox_i
+                num_dec_layer += 1
 
         return loss_dict
 
@@ -1084,3 +1114,5 @@ class CmtLidarHead(CmtHead):
             ret_dicts.append(outs)
 
         return ret_dicts
+    
+    

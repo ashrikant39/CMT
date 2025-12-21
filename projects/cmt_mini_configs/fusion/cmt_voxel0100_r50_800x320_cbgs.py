@@ -10,7 +10,7 @@ voxel_size = [0.1, 0.1, 0.2]
 out_size_factor = 8
 evaluation = dict(interval=20)
 dataset_type = 'CustomNuScenesDataset'
-data_root = '/home/ashri/hunseok-datasets/object-detection-datasets/nuscenes-mini-cmt/'
+data_root = 'data/nuscenes/'
 input_modality = dict(
     use_lidar=True,
     use_camera=True,

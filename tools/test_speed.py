@@ -23,7 +23,6 @@ from PIL import Image
 import torch.nn.functional as F 
 import matplotlib
 
-
 class BatchWrapper(nn.Module):
     
     def __init__(self, model, batch_dict):
@@ -109,7 +108,7 @@ class Wrapper:
         print(f'Average time: {total_time / num_iters}')
     
     
-    def test_flops(self, num_iters=100, amp=False):
+    def test_flops(self, num_iters=1, amp=False):
         data_loader = build_dataloader(
             self.dataset,
             samples_per_gpu=1,
@@ -132,7 +131,7 @@ class Wrapper:
 
 if __name__ == '__main__':
     wrapper = Wrapper(
-        cfg='projects/configs/fusion/cmt_voxel0100_r50_800x320_cbgs.py',
+        cfg="projects/cmt_configs/fusion/cmt_voxel0075_vov_1600x640_cbgs.py",
     )
-    wrapper.test_flops(amp=False)
+    wrapper.test_flops(amp=True)
     

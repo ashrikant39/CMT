@@ -455,6 +455,7 @@ class QTNetHead(nn.Module):
         #extra = boxes[..., 9:]
 
         if motion_update:
+            vel = boxes[..., 7:9]
             center[..., 0] = center[..., 0] + vel[..., 0] * 0.5 * 1 if forward else -1
             center[..., 1] = center[..., 1] + vel[..., 1] * 0.5 * 1 if forward else -1
 

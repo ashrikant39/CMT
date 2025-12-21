@@ -14,9 +14,11 @@ from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
 import mmdet
 from mmdet3d.apis import single_gpu_test
 from mmdet3d.datasets import build_dataloader, build_dataset
+from mmdet.datasets import build_dataloader as build_mmdet_dataloader
 from mmdet3d.models import build_model
-from mmdet.apis import multi_gpu_test, set_random_seed
+from mmdet.apis import set_random_seed
 from mmdet.datasets import replace_ImageToTensor
+from mmdet3d.core.visualizer.image_vis import draw_lidar_bbox3d_on_img
 
 if mmdet.__version__ > '2.23.0':
     # If mmdet version > 2.23.0, setup_multi_processes would be imported and
@@ -31,6 +33,20 @@ try:
     from mmdet.utils import compat_cfg
 except ImportError:
     from mmdet3d.utils import compat_cfg
+
+
+
+import time
+
+import mmcv
+import torch
+import torch.distributed as dist
+from mmcv.runner import get_dist_info
+
+from mmdet.core import encode_mask_results
+from mmdet.apis.test import collect_results_gpu, collect_results_cpu
+from mmcv.parallel import scatter
+from projects.mmdet3d_plugin.mmcv_custom.utils import multi_gpu_test
 
 
 def parse_args():
@@ -129,7 +145,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-
+    print("Parsed Args")
     assert args.out or args.eval or args.format_only or args.show \
         or args.show_dir, \
         ('Please specify at least one operation (save/eval/format/show the '
@@ -200,8 +216,11 @@ def main():
         distributed = False
     else:
         distributed = True
+        print(f"Dist Params: {cfg.dist_params}")
         init_dist(args.launcher, **cfg.dist_params)
-
+        _, world_size = get_dist_info()
+        print(f"World Size: {world_size}")
+        
     test_dataloader_default_args = dict(
         samples_per_gpu=8, workers_per_gpu=4, dist=distributed, shuffle=False)
 
@@ -230,12 +249,23 @@ def main():
 
     # build the dataloader
     dataset = build_dataset(cfg.data.test)
-    data_loader = build_dataloader(dataset, **test_loader_cfg)
+    # print("Test Params")
+    # print("-"*50)
+    # print(test_loader_cfg)
+    # print("-"*50)
+    
+    if distributed:
+        data_loader = build_mmdet_dataloader(
+            dataset,
+            **test_loader_cfg,
+            num_gpus=world_size
+        )
+    else:
+        data_loader = build_dataloader(dataset, **test_loader_cfg)        
 
     # build the model and load checkpoint
     cfg.model.train_cfg = None
     model = build_model(cfg.model, test_cfg=cfg.get('test_cfg'))
-    
     fp16_cfg = cfg.get('fp16', None)
     if fp16_cfg is not None:
         wrap_fp16_model(model)
@@ -265,7 +295,9 @@ def main():
             broadcast_buffers=False)
         outputs = multi_gpu_test(model, data_loader, args.tmpdir,
                                  args.gpu_collect)
-
+        
+    # mmcv.dump(outputs, "work_dir/bbox_outs/cmt_outs.pkl")
+        
     rank, _ = get_dist_info()
     if rank == 0:
         if args.out:

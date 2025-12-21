@@ -62,8 +62,14 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
         scores, indexs = cls_scores.view(-1).topk(max_num)
         labels = indexs % self.num_classes
         bbox_index = indexs // self.num_classes
-        task_index = torch.gather(task_ids, 1, labels.unsqueeze(1)).squeeze()
 
+        assert labels.dtype in (torch.int64, torch.int32), labels.dtype
+        assert labels.device == task_ids.device
+        mx, mn = int(labels.max()), int(labels.min())
+        B, K = task_ids.shape
+        if mn < 0 or mx >= K:
+            raise RuntimeError(f"Task IDS shape {task_ids.shape} labels out of range: min={mn}, max={mx}, valid [0,{K-1}]")
+        task_index = torch.gather(task_ids, 1, labels.unsqueeze(1)).squeeze()
         bbox_preds = bbox_preds[task_index * num_query + bbox_index]
 
         final_box_preds = denormalize_bbox(bbox_preds, self.pc_range)   
@@ -97,9 +103,9 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
             raise NotImplementedError(
                 'Need to reorganize output as a batch, only '
                 'support post_center_range is not None for now!')
-        return predictions_dict
+        return predictions_dict, bbox_index
 
-    def decode(self, preds_dicts):
+    def decode(self, preds_dicts, return_indices=False):
         """Decode bboxes.
         Args:
             all_cls_scores (Tensor): Outputs from the classification head, \
@@ -112,7 +118,6 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
             list[dict]: Decoded boxes.
         """
         task_num = len(preds_dicts)
-
         pred_bbox_list, pred_logits_list, task_ids_list = [], [], []
         for task_id in range(task_num):
             task_pred_dict = preds_dicts[task_id][0]
@@ -129,14 +134,20 @@ class MultiTaskBBoxCoder(BaseBBoxCoder):
             task_ids = task_pred_logits.new_ones(task_pred_logits.shape).int() * task_id
             task_ids_list.append(task_ids)
         
-       
         all_pred_logits = torch.cat(pred_logits_list, dim=-1)  # bs * nq * 10
         all_pred_bbox = torch.cat(pred_bbox_list, dim=1)  # bs * (task nq) * 10
         all_task_ids = torch.cat(task_ids_list, dim=-1) # bs * nq * 10
 
         batch_size = all_pred_logits.shape[0]
         predictions_list = []
+        indices_list = []
+        
         for i in range(batch_size):
-            predictions_list.append(
-                self.decode_single(all_pred_logits[i], all_pred_bbox[i], all_task_ids[i]))
+            preds, indices = self.decode_single(all_pred_logits[i], all_pred_bbox[i], all_task_ids[i])
+            predictions_list.append(preds)
+            indices_list.append(indices)
+        
+        if return_indices is True:
+            return predictions_list, indices_list
+        
         return predictions_list

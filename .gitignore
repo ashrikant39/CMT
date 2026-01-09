@@ -152,4 +152,4 @@ scripts/
 *.py
 *.sh
 *.pkl
-**/*.png
+**/*.png    
